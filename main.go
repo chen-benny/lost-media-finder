@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +22,7 @@ const (
 	testUrl      = "https://www.vidlii.com/user/rinkomania"
 	videoPattern = "/watch?v="
 	titleSuffix  = " - VidLii"
+	outputFile   = "targets.json"
 )
 
 // the reported date is before 2022
@@ -28,9 +31,9 @@ var (
 )
 
 type Video struct {
-	URL   string
-	Title string
-	Date  time.Time
+	URL   string    `json:url`
+	Title string    `json:title`
+	Date  time.Time `json:date`
 }
 
 // Match selects video that has Japanese chars in title and date before cutoff
@@ -151,12 +154,27 @@ func (c *Crawler) Run() {
 	}
 }
 
+func (c *Crawler) Save() error {
+	f, err := os.Create(outputFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(c.targets)
+}
+
 func main() {
 	c := NewCrawler()
 	defer c.ticker.Stop()
 	c.Run()
-	fmt.Printf("targets found: %d\n", len(c.targets))
-	for _, v := range c.targets {
-		fmt.Printf("%s | %s | %s\n", v.Title, v.Date.Format("Jan 2, 2006"), v.URL)
+
+	if err := c.Save(); err != nil {
+		log.Printf("Error saving: %s", err)
 	}
+
+	fmt.Printf("visited %d videos targets found: %d\n", c.count, len(c.targets))
+	fmt.Printf("Save to %s\n", outputFile)
 }
