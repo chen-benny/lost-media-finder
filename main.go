@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -23,6 +25,8 @@ const (
 	videoPattern = "/watch?v="
 	titleSuffix  = " - VidLii"
 	outputFile   = "targets.json"
+
+	redisAddr = "localhost:6379"
 )
 
 // the reported date is before 2022
@@ -56,10 +60,15 @@ type Crawler struct {
 	count   int
 	queue   chan string
 	ticker  *time.Ticker
+
+	redis *redis.Client
 }
 
 func NewCrawler() *Crawler {
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+
 	return &Crawler{
+		redis:  rdb,
 		queue:  make(chan string, bufferSize),
 		ticker: time.NewTicker(time.Millisecond * 500),
 	}
@@ -79,6 +88,12 @@ func (c *Crawler) worker() {
 
 func (c *Crawler) process(url string) {
 	if c.done() {
+		return
+	}
+
+	ctx := context.Background()
+	added, err := c.redis.SetNX(ctx, "vidlii:"+url, 1, 24*time.Hour).Result() // Redis SETNX with 24h TTL
+	if err != nil || !added {
 		return
 	}
 
@@ -154,6 +169,10 @@ func (c *Crawler) Run() {
 	}
 }
 
+func (c *Crawler) Close() {
+	c.redis.Close()
+}
+
 func (c *Crawler) Save() error {
 	f, err := os.Create(outputFile)
 	if err != nil {
@@ -169,6 +188,7 @@ func (c *Crawler) Save() error {
 func main() {
 	c := NewCrawler()
 	defer c.ticker.Stop()
+	defer c.Close()
 	c.Run()
 
 	if err := c.Save(); err != nil {
