@@ -14,6 +14,9 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/redis/go-redis/v9"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const (
@@ -26,7 +29,13 @@ const (
 	titleSuffix  = " - VidLii"
 	outputFile   = "targets.json"
 
-	redisAddr = "localhost:6379"
+	redisAddr   = "localhost:6379"
+	redisPrefix = "vidlii:"
+	redisTTL    = 24 * time.Hour
+
+	mongoURI = "mongodb://localhost:27017"
+	mongoDB  = "vidlii"
+	mongoCol = "videos"
 )
 
 // the reported date is before 2022
@@ -35,14 +44,16 @@ var (
 )
 
 type Video struct {
-	URL   string    `json:url`
-	Title string    `json:title`
-	Date  time.Time `json:date`
+	URL      string `json:"url" bson:"_id"`
+	Title    string `json:"title" bson:"title"`
+	Date     string `json:"date" bson:"date"`
+	IsTarget bool   `json:"is_target" bson:"is_target"`
 }
 
 // Match selects video that has Japanese chars in title and date before cutoff
 func (v Video) Match() bool {
-	if v.Date.IsZero() || !v.Date.Before(cutoffDate) {
+	date, _ := time.Parse("Jan 2, 2006", v.Date)
+	if date.IsZero() || !date.Before(cutoffDate) {
 		return false
 	}
 	for _, c := range v.Title {
@@ -54,7 +65,6 @@ func (v Video) Match() bool {
 }
 
 type Crawler struct {
-	visited sync.Map
 	targets []Video
 	mu      sync.Mutex
 	count   int
@@ -62,13 +72,29 @@ type Crawler struct {
 	ticker  *time.Ticker
 
 	redis *redis.Client
+	mongo *mongo.Collection
 }
 
 func NewCrawler() *Crawler {
+	ctx := context.Background()
 	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Fatal("Redis connection failed:", err)
+	}
+
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	if err != nil {
+		log.Fatal("MongoDB connection failed:", err)
+	}
+
+	col := client.Database(mongoDB).Collection(mongoCol)
+	col.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "date", Value: 1}},
+	})
 
 	return &Crawler{
 		redis:  rdb,
+		mongo:  col,
 		queue:  make(chan string, bufferSize),
 		ticker: time.NewTicker(time.Millisecond * 500),
 	}
@@ -77,7 +103,7 @@ func NewCrawler() *Crawler {
 func (c *Crawler) done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.count > maxVideos
+	return c.count >= maxVideos
 }
 
 func (c *Crawler) worker() {
@@ -92,12 +118,8 @@ func (c *Crawler) process(url string) {
 	}
 
 	ctx := context.Background()
-	added, err := c.redis.SetNX(ctx, "vidlii:"+url, 1, 24*time.Hour).Result() // Redis SETNX with 24h TTL
+	added, err := c.redis.SetNX(ctx, redisPrefix+url, 1, redisTTL).Result() // Redis SETNX with 24h TTL
 	if err != nil || !added {
-		return
-	}
-
-	if _, seen := c.visited.LoadOrStore(url, true); seen {
 		return
 	}
 
@@ -130,17 +152,21 @@ func (c *Crawler) process(url string) {
 
 		title := strings.TrimSuffix(doc.Find("title").Text(), titleSuffix)
 		dateStr := strings.TrimSpace(doc.Find("date").First().Text())
-		date, _ := time.Parse("Jan 2, 2006", dateStr)
 
-		v := Video{URL: url, Title: title, Date: date}
-		log.Printf("[%d] %s | %s", n, title, dateStr)
+		v := Video{URL: url, Title: title, Date: dateStr, IsTarget: false}
 
 		if v.Match() {
+			v.IsTarget = true
 			c.mu.Lock()
 			c.targets = append(c.targets, v)
 			c.mu.Unlock()
 			log.Printf("Found one target: %s", v.Title)
 		}
+
+		ctx := context.Background()
+		c.mongo.ReplaceOne(ctx, bson.M{"_id": v.URL}, v, options.Replace().SetUpsert(true))
+
+		log.Printf("[%d] %s | %s | target=%v", n, title, dateStr, v.IsTarget)
 	}
 
 	doc.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
@@ -157,6 +183,31 @@ func (c *Crawler) process(url string) {
 	})
 }
 
+func (c *Crawler) Resume() {
+	ctx := context.Background()
+	cursor, err := c.mongo.Find(ctx, bson.M{})
+	if err != nil {
+		log.Printf("Resume failed: %s", err)
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var videos []Video
+	if err := cursor.All(ctx, &videos); err != nil {
+		log.Printf("Resume failed: %s", err)
+		return
+	}
+
+	for _, v := range videos {
+		c.redis.SetNX(ctx, redisPrefix+v.URL, 1, redisTTL)
+		if v.Match() {
+			c.targets = append(c.targets, v)
+		}
+	}
+	c.count = len(videos)
+	log.Printf("Resumed %d videos, %d targets", c.count, len(c.targets))
+}
+
 func (c *Crawler) Run() {
 	c.queue <- testUrl
 
@@ -171,6 +222,7 @@ func (c *Crawler) Run() {
 
 func (c *Crawler) Close() {
 	c.redis.Close()
+	c.mongo.Database().Client().Disconnect(context.Background())
 }
 
 func (c *Crawler) Save() error {
@@ -189,6 +241,8 @@ func main() {
 	c := NewCrawler()
 	defer c.ticker.Stop()
 	defer c.Close()
+
+	c.Resume()
 	c.Run()
 
 	if err := c.Save(); err != nil {

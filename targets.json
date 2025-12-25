@@ -1,7 +1,14 @@
 [
   {
-    "URL": "https://www.vidlii.com/watch?v=K5u6i67Cg3e",
-    "Title": "アイドルマスター　急降下爆撃～STUKA Lied2008～　スツーカリート.flv",
-    "Date": "2017-12-25T00:00:00Z"
+    "url": "https://www.vidlii.com/watch?v=K5u6i67Cg3e",
+    "title": "アイドルマスター　急降下爆撃～STUKA Lied2008～　スツーカリート.flv",
+    "date": "Dec 25, 2017",
+    "is_target": false
+  },
+  {
+    "url": "https://www.vidlii.com/watch?v=wUyaIVYGvOM",
+    "title": "【手描き】 Hatsune Miku - World is Mine【PV】with English Subs",
+    "date": "Jun 12, 2020",
+    "is_target": false
   }
 ]
