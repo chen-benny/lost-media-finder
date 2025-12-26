@@ -237,11 +237,19 @@ func (c *Crawler) Save() error {
 	return enc.Encode(c.targets)
 }
 
+func (c *Crawler) Clear() {
+	ctx := context.Background()
+	c.mongo.Drop(ctx)
+	c.redis.FlushDB(ctx)
+	log.Println("Cleared MongoDB and Redis")
+}
+
 func main() {
 	c := NewCrawler()
 	defer c.ticker.Stop()
 	defer c.Close()
 
+	c.Clear() // uncomment in production
 	c.Resume()
 	c.Run()
 
