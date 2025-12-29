@@ -15,6 +15,9 @@ import (
 	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -43,11 +46,39 @@ const (
 	loginURL = "https://www.vidlii.com/login"
 	username = "bennyc"
 	password = "abc123456"
+
+	metricsPort = ":9090"
 )
 
 // the reported date is before 2022
 var (
 	cutoffDate = time.Date(2021, 12, 31, 23, 59, 59, 0, time.UTC)
+
+	pagesProcessed = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pages_processed",
+		Help: "The total number of pages processed",
+	})
+	videosFound = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "videos_found",
+		Help: "The total number of videos found",
+	})
+	targetsFound = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "targets_found",
+		Help: "The total number of targets found",
+	})
+	errorCount = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "error_count",
+		Help: "The total number of errors",
+	})
+	queueSize = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "queue_size",
+		Help: "Current queue",
+	})
+	fetchDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "fetch_duration",
+		Help:    "The total fetch duration",
+		Buckets: []float64{0.1, 0.5, 1, 2, 5},
+	})
 )
 
 type Video struct {
@@ -131,7 +162,9 @@ func (c *Crawler) process(url string) {
 
 	time.Sleep(rateLimit) // each worker obey individual rate limit
 
+	start := time.Now()
 	resp, err := c.client.Get(url)
+	fetchDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
 		log.Printf("Error fetching %s: %s", url, err)
 		return
@@ -140,10 +173,12 @@ func (c *Crawler) process(url string) {
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	resp.Body.Close()
 	if err != nil {
+		errorCount.Inc()
 		log.Printf("Error parsing %s: %s", url, err)
 		return
 	}
 
+	pagesProcessed.Inc()
 	log.Printf("parsed %s: %s", url, resp.Status)
 
 	if strings.Contains(url, videoPattern) {
@@ -161,12 +196,16 @@ func (c *Crawler) process(url string) {
 
 		v := Video{URL: url, Title: title, Date: dateStr, IsTarget: false}
 
+		videosFound.Inc()
+
 		if v.Match() {
 			v.IsTarget = true
 			c.mu.Lock()
 			c.targets = append(c.targets, v)
 			c.mu.Unlock()
 			log.Printf("Found one target: %s", v.Title)
+
+			targetsFound.Inc()
 		}
 
 		ctx := context.Background()
@@ -215,6 +254,12 @@ func (c *Crawler) Resume() {
 }
 
 func (c *Crawler) Run() {
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Printf("Metrics at https://localhost%s/metrics", metricsPort)
+		http.ListenAndServe(metricsPort, nil)
+	}()
+
 	c.queue <- testUrl
 
 	for i := 0; i < workers; i++ {
@@ -222,6 +267,7 @@ func (c *Crawler) Run() {
 	}
 
 	for !c.done() {
+		queueSize.Set(float64(len(c.queue)))
 		time.Sleep(time.Millisecond * 500)
 	}
 }
