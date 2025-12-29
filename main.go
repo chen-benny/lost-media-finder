@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -20,9 +22,10 @@ import (
 )
 
 const (
-	maxVideos    = 100
+	maxVideos    = 30
 	workers      = 4
 	bufferSize   = 10000
+	rateLimit    = 1 * time.Second // 1 req/sec per worker
 	baseUrl      = "https://www.vidlii.com"
 	testUrl      = "https://www.vidlii.com/user/rinkomania"
 	videoPattern = "/watch?v="
@@ -36,6 +39,10 @@ const (
 	mongoURI = "mongodb://localhost:27017"
 	mongoDB  = "vidlii"
 	mongoCol = "videos"
+
+	loginURL = "https://www.vidlii.com/login"
+	username = "bennyc"
+	password = "abc123456"
 )
 
 // the reported date is before 2022
@@ -69,10 +76,10 @@ type Crawler struct {
 	mu      sync.Mutex
 	count   int
 	queue   chan string
-	ticker  *time.Ticker
 
-	redis *redis.Client
-	mongo *mongo.Collection
+	redis  *redis.Client
+	mongo  *mongo.Collection
+	client *http.Client
 }
 
 func NewCrawler() *Crawler {
@@ -93,10 +100,9 @@ func NewCrawler() *Crawler {
 	})
 
 	return &Crawler{
-		redis:  rdb,
-		mongo:  col,
-		queue:  make(chan string, bufferSize),
-		ticker: time.NewTicker(time.Millisecond * 500),
+		redis: rdb,
+		mongo: col,
+		queue: make(chan string, bufferSize),
 	}
 }
 
@@ -123,9 +129,9 @@ func (c *Crawler) process(url string) {
 		return
 	}
 
-	<-c.ticker.C
+	time.Sleep(rateLimit) // each worker obey individual rate limit
 
-	resp, err := http.Get(url)
+	resp, err := c.client.Get(url)
 	if err != nil {
 		log.Printf("Error fetching %s: %s", url, err)
 		return
@@ -244,12 +250,36 @@ func (c *Crawler) Clear() {
 	log.Println("Cleared MongoDB and Redis")
 }
 
+func (c *Crawler) Login() error {
+	jar, _ := cookiejar.New(nil)
+	c.client = &http.Client{Jar: jar}
+
+	resp, err := c.client.PostForm(loginURL, url.Values{
+		"username": {username},
+		"password": {password},
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("login failed: %d", resp.StatusCode)
+	}
+
+	log.Println("Login success")
+	return nil
+}
+
 func main() {
 	c := NewCrawler()
-	defer c.ticker.Stop()
 	defer c.Close()
 
 	c.Clear() // uncomment in production
+	err := c.Login()
+	if err != nil {
+		fmt.Println(err)
+	}
 	c.Resume()
 	c.Run()
 
