@@ -31,7 +31,7 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		MaxVideos:    30,
+		MaxVideos:    100,
 		Workers:      4,
 		BufferSize:   10000,
 		BaseUrl:      "https://www.vidlii.com",
@@ -39,7 +39,7 @@ func Load() *Config {
 		VideoPattern: "/watch?v=",
 		TitleSuffix:  " - VidLii",
 		OutputFile:   "targets.json",
-		RateLimit:    1 * time.Second,
+		RateLimit:    2 * time.Second,
 		CutoffDate:   time.Date(2021, 12, 31, 23, 59, 59, 0, time.UTC),
 
 		RedisAddr:   "localhost:6379",
@@ -54,6 +54,6 @@ func Load() *Config {
 		Username: "bennyc",
 		Password: "abc123456",
 
-		MetricsPort: "9090",
+		MetricsPort: "2112",
 	}
 }
