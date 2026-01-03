@@ -51,12 +51,6 @@ func (c *Crawler) TargetCount() int {
 	return len(c.targets)
 }
 
-func (c *Crawler) done() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.count >= c.cfg.MaxVideos
-}
-
 func (c *Crawler) worker() {
 	for url := range c.queue {
 		c.process(url)
@@ -64,10 +58,6 @@ func (c *Crawler) worker() {
 }
 
 func (c *Crawler) process(url string) {
-	if c.done() {
-		return
-	}
-
 	ctx := context.Background()
 	added, err := c.redis.TryAdd(ctx, c.cfg.RedisPrefix, url, c.cfg.RedisTTL)
 	if err != nil || !added {
@@ -96,11 +86,12 @@ func (c *Crawler) process(url string) {
 
 	if strings.Contains(url, c.cfg.VideoPattern) {
 		idx := strings.Index(url, c.cfg.VideoPattern)
-		url = c.cfg.VideoPattern + url[idx:]
+		url = c.cfg.BaseUrl + url[idx:]
 
 		c.mu.Lock()
 		c.count++
-		n := c.count
+		videoCount := c.count
+		targetCount := len(c.targets)
 		c.mu.Unlock()
 
 		title := strings.TrimSuffix(doc.Find("title").Text(), c.cfg.TitleSuffix)
@@ -113,12 +104,17 @@ func (c *Crawler) process(url string) {
 		if v.IsTarget {
 			c.mu.Lock()
 			c.targets = append(c.targets, v)
+			log.Printf("[FOUND] target: %d, %s - %s", len(c.targets), v.Title, dateStr)
 			c.mu.Unlock()
 			metrics.TargetsFound.Inc()
 		}
 
 		c.mongo.Upsert(ctx, v)
-		log.Printf("[%d] %s | %s | target=%v", n, title, dateStr, v.IsTarget)
+		// log.Printf("[%d] %s | %s | target=%v", n, title, dateStr, v.IsTarget)
+
+		if videoCount%100 == 0 {
+			log.Println("[PROC] Processing video: %d videos, %d targets", videoCount, targetCount)
+		}
 	}
 
 	doc.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
@@ -161,9 +157,41 @@ func (c *Crawler) Run(url string) {
 
 	c.queue <- url
 
-	for !c.done() {
+	for {
 		metrics.QueueSize.Set(float64(len(c.queue)))
+		time.Sleep(c.cfg.RateLimit * 2)
+
+		if len(c.queue) == 0 {
+			time.Sleep(c.cfg.RateLimit * 2)
+			if len(c.queue) == 0 {
+				log.Println("[INFO] Crawler completed")
+				close(c.queue)
+				return
+			}
+		}
+
+	}
+}
+
+func (c *Crawler) RunTest(url string) {
+	for i := 0; i < c.cfg.Workers; i++ {
+		go c.worker()
+	}
+
+	c.queue <- url
+
+	for {
 		time.Sleep(c.cfg.RateLimit)
+
+		c.mu.Lock()
+		count := c.count
+		c.mu.Unlock()
+
+		if count >= 10 {
+			log.Println("[INFO] Test limit reached")
+			close(c.queue)
+			return
+		}
 	}
 }
 
