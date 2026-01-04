@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"lost-media-finder/internal/auth"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -66,19 +67,32 @@ func (c *Crawler) process(url string) {
 
 	time.Sleep(c.cfg.RateLimit)
 
-	start := time.Now()
-	resp, err := c.client.Get(url)
-	metrics.FetchDuration.Observe(time.Since(start).Seconds())
+	var resp *http.Response
+	var doc *goquery.Document
+	maxRetries := 3
 
-	if err != nil {
-		metrics.Errors.Inc()
-		return
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		start := time.Now()
+		resp, err = c.client.Get(url)
+		metrics.FetchDuration.Observe(time.Since(start).Seconds())
+
+		if err == nil {
+			doc, err = goquery.NewDocumentFromReader(resp.Body)
+			resp.Body.Close()
+			if err == nil {
+				break // success
+			}
+		}
+
+		if attempt < maxRetries {
+			log.Printf("[WARN] Retry %d/%d for %s: %v", attempt, maxRetries, url, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
 	}
 
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	resp.Body.Close()
 	if err != nil {
 		metrics.Errors.Inc()
+		log.Printf("[ERROR] Failed to fetch %s: %v", url, err)
 		return
 	}
 
@@ -113,7 +127,7 @@ func (c *Crawler) process(url string) {
 		// log.Printf("[%d] %s | %s | target=%v", n, title, dateStr, v.IsTarget)
 
 		if videoCount%100 == 0 {
-			log.Printf("[PROC] Processing video: %d videos, %d targets", videoCount, targetCount)
+			log.Printf("[PROG] Processing video: %d videos, %d targets", videoCount, targetCount)
 		}
 	}
 

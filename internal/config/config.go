@@ -33,13 +33,13 @@ func Load() *Config {
 	return &Config{
 		// MaxVideos:    100,
 		Workers:      4,
-		BufferSize:   10000,
+		BufferSize:   100000000,
 		BaseUrl:      "https://www.vidlii.com",
 		TestUrl:      "https://www.vidlii.com/user/rinkomania",
 		VideoPattern: "/watch?v=",
 		TitleSuffix:  " - VidLii",
 		OutputFile:   "targets.json",
-		RateLimit:    2 * time.Second,
+		RateLimit:    1 * time.Second,
 		CutoffDate:   time.Date(2021, 12, 31, 23, 59, 59, 0, time.UTC),
 
 		RedisAddr:   "localhost:6379",
