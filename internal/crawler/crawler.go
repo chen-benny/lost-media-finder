@@ -104,7 +104,7 @@ func (c *Crawler) process(url string) {
 		if v.IsTarget {
 			c.mu.Lock()
 			c.targets = append(c.targets, v)
-			log.Printf("[FOUND] target: %d, %s - %s", len(c.targets), v.Title, dateStr)
+			log.Printf("[FOUND] %d, %s - %s", len(c.targets), v.Title, v.URL)
 			c.mu.Unlock()
 			metrics.TargetsFound.Inc()
 		}
