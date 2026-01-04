@@ -15,7 +15,7 @@ make status
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.25+
 - Docker & Docker Compose
 - 2GB RAM minimum
 
@@ -30,10 +30,6 @@ MONGO_URI=mongodb://localhost:27017
 
 ## Commands
 ```
-make docker-up      # Start Redis/Mongo/Prometheus/Grafana
-make docker-down    # Stop services
-make docker-logs    # View logs
-make crawler        # Run crawler
-make status         # Check status
-make clean          # Remove all data
+go build -o crawler cmd/crawler/main.go
+nohup ./crawler > /dev/null 2>&1 &
 ```

@@ -113,7 +113,7 @@ func (c *Crawler) process(url string) {
 		// log.Printf("[%d] %s | %s | target=%v", n, title, dateStr, v.IsTarget)
 
 		if videoCount%100 == 0 {
-			log.Println("[PROC] Processing video: %d videos, %d targets", videoCount, targetCount)
+			log.Printf("[PROC] Processing video: %d videos, %d targets", videoCount, targetCount)
 		}
 	}
 

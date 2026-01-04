@@ -19,7 +19,7 @@ docker-down:
 	docker-compose down
 
 docker-logs:
-	docker-compose logs -f:w
+	docker-compose logs -f
 
 crawler:
 	go run cmd/crawler/main.go
