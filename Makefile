@@ -22,7 +22,10 @@ docker-logs:
 	docker-compose logs -f
 
 crawler:
-	go run cmd/crawler/main.go
+	nohup go run cmd/crawler/main.go >/dev/null 2>&1 &
+
+test:
+	go run cmd/crawler/main.go --test
 
 status:
 	@docker-compose ps
