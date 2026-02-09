@@ -174,7 +174,6 @@ func (c *Crawler) Run(url string) {
 	for {
 		metrics.QueueSize.Set(float64(len(c.queue)))
 		time.Sleep(c.cfg.RateLimit * 2)
-
 		if len(c.queue) == 0 {
 			time.Sleep(c.cfg.RateLimit * 2)
 			if len(c.queue) == 0 {
