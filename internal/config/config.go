@@ -3,7 +3,7 @@ package config
 import "time"
 
 type Config struct {
-	// MaxVideos    int
+	MaxVideos    int
 	Workers      int
 	BufferSize   int
 	BaseUrl      string
@@ -31,9 +31,9 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		// MaxVideos:    100,
+		MaxVideos:    100,
 		Workers:      6,
-		BufferSize:   1000,
+		BufferSize:   1000000,
 		BaseUrl:      "https://www.vidlii.com",
 		TestUrl:      "https://www.vidlii.com/user/rinkomania",
 		VideoPattern: "/watch?v=",

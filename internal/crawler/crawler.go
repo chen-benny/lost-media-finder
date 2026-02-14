@@ -17,17 +17,20 @@ import (
 	"lost-media-finder/internal/storage"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/time/rate"
 )
 
 type Crawler struct {
-	cfg     *config.Config
-	redis   *storage.Redis
-	mongo   *storage.Mongo
-	client  *auth.Client
-	targets []model.Video
-	mu      sync.Mutex
-	count   int
-	queue   chan string
+	cfg      *config.Config
+	redis    *storage.Redis
+	mongo    *storage.Mongo
+	client   *auth.Client
+	targets  []model.Video
+	mu       sync.Mutex
+	count    int
+	queue    chan string
+	wg       sync.WaitGroup
+	maxCount int
 }
 
 func New(cfg *config.Config, redis *storage.Redis, mongo *storage.Mongo) *Crawler {
@@ -53,19 +56,37 @@ func (c *Crawler) TargetCount() int {
 }
 
 func (c *Crawler) worker() {
+	limiter := rate.NewLimiter(rate.Every(c.cfg.RateLimit), 1)
 	for url := range c.queue {
-		c.process(url)
+		if c.maxCount <= 0 || c.Count() < c.maxCount {
+			limiter.Wait(context.Background())
+			c.process(url)
+		}
+		c.wg.Done()
 	}
 }
 
+func (c *Crawler) enqueue(url string) {
+	c.wg.Add(1)
+	go func() {
+		c.queue <- url
+	}()
+}
+
 func (c *Crawler) process(url string) {
+	if c.maxCount > 0 { // for RunTest
+		c.mu.Lock()
+		if c.count >= c.maxCount {
+			c.mu.Unlock()
+			return
+		}
+		c.mu.Unlock()
+	}
 	ctx := context.Background()
 	added, err := c.redis.TryAdd(ctx, c.cfg.RedisPrefix, url, c.cfg.RedisTTL)
 	if err != nil || !added {
 		return
 	}
-
-	time.Sleep(c.cfg.RateLimit)
 
 	var resp *http.Response
 	var doc *goquery.Document
@@ -126,7 +147,7 @@ func (c *Crawler) process(url string) {
 		c.mongo.Upsert(ctx, v)
 		// log.Printf("[%d] %s | %s | target=%v", n, title, dateStr, v.IsTarget)
 
-		if videoCount%100 == 0 {
+		if videoCount%1000 == 0 {
 			log.Printf("[PROG] Processing video: %d videos, %d targets", videoCount, targetCount)
 		}
 	}
@@ -137,10 +158,7 @@ func (c *Crawler) process(url string) {
 			href = c.cfg.BaseUrl + href
 		}
 		if strings.HasPrefix(href, c.cfg.BaseUrl) {
-			select {
-			case c.queue <- href:
-			default:
-			}
+			c.enqueue(href)
 		}
 	})
 }
@@ -168,44 +186,22 @@ func (c *Crawler) Run(url string) {
 	for i := 0; i < c.cfg.Workers; i++ {
 		go c.worker()
 	}
-
-	c.queue <- url
-
-	for {
-		metrics.QueueSize.Set(float64(len(c.queue)))
-		time.Sleep(c.cfg.RateLimit * 2)
-		if len(c.queue) == 0 {
-			time.Sleep(c.cfg.RateLimit * 2)
-			if len(c.queue) == 0 {
-				log.Println("[INFO] Crawler completed")
-				close(c.queue)
-				return
-			}
-		}
-
-	}
+	c.enqueue(url)
+	c.wg.Wait()
+	close(c.queue)
+	log.Printf("[INFO] Crawler Finished")
 }
 
 func (c *Crawler) RunTest(url string) {
+	c.maxCount = c.cfg.MaxVideos
 	for i := 0; i < c.cfg.Workers; i++ {
 		go c.worker()
 	}
 
-	c.queue <- url
-
-	for {
-		time.Sleep(c.cfg.RateLimit)
-
-		c.mu.Lock()
-		count := c.count
-		c.mu.Unlock()
-
-		if count >= 10 {
-			log.Println("[INFO] Test limit reached")
-			close(c.queue)
-			return
-		}
-	}
+	c.enqueue(url)
+	c.wg.Wait()
+	close(c.queue)
+	log.Printf("[INFO] Crawler Finished Test")
 }
 
 func (c *Crawler) Save() error {
