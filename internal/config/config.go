@@ -32,7 +32,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		MaxVideos:    100,
-		Workers:      6,
+		Workers:      30,
 		BufferSize:   1000000,
 		BaseUrl:      "https://www.vidlii.com",
 		TestUrl:      "https://www.vidlii.com/user/rinkomania",

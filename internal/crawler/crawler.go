@@ -68,9 +68,35 @@ func (c *Crawler) worker() {
 
 func (c *Crawler) enqueue(url string) {
 	c.wg.Add(1)
-	go func() {
-		c.queue <- url
-	}()
+	select {
+	case c.queue <- url:
+	default:
+		if err := c.redis.PushOverflow(context.Background(), url); err != nil {
+			c.wg.Done()
+		}
+	}
+}
+
+func (c *Crawler) drainOverFlow(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		url, err := c.redis.PopOverflow(ctx)
+		if err != nil || url == "" {
+			time.Sleep(time.Second)
+			continue
+		}
+
+		select {
+		case c.queue <- url:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (c *Crawler) process(url string) {
@@ -183,23 +209,33 @@ func (c *Crawler) Resume() {
 }
 
 func (c *Crawler) Run(url string) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go c.drainOverFlow(ctx)
+
 	for i := 0; i < c.cfg.Workers; i++ {
 		go c.worker()
 	}
 	c.enqueue(url)
 	c.wg.Wait()
+	cancel() // stop drain first
 	close(c.queue)
 	log.Printf("[INFO] Crawler Finished")
 }
 
 func (c *Crawler) RunTest(url string) {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	c.maxCount = c.cfg.MaxVideos
+	go c.drainOverFlow(ctx)
+
 	for i := 0; i < c.cfg.Workers; i++ {
 		go c.worker()
 	}
 
 	c.enqueue(url)
 	c.wg.Wait()
+	cancel()
 	close(c.queue)
 	log.Printf("[INFO] Crawler Finished Test")
 }
